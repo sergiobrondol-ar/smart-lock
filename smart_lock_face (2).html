@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Lock — Reconnaissance Faciale</title>
+
+<!-- face-api.js depuis CDN -->
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+<style>
+:root {
+  --bg: #080b12;
+  --surface: #0f1520;
+  --surface2: #171e2e;
+  --border: #1e2a40;
+  --accent: #00d4ff;
+  --success: #00ff88;
+  --danger: #ff3860;
+  --warning: #ffb300;
+  --muted: #4a5a7a;
+  --text: #c8d8f0;
+  --font: 'Courier New', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem 1rem;
+}
+
+/* Scanlines effect */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,212,255,0.015) 2px,
+    rgba(0,212,255,0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+.header h1 {
+  font-size: 1.4rem;
+  letter-spacing: 8px;
+  color: var(--accent);
+  text-transform: uppercase;
+  text-shadow: 0 0 20px rgba(0,212,255,0.4);
+}
+.header p {
+  font-size: 0.65rem;
+  color: var(--muted);
+  letter-spacing: 3px;
+  margin-top: 0.3rem;
+}
+
+.grid {
+  width: 100%;
+  max-width: 860px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+.full { grid-column: 1 / -1; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.2rem;
+  position: relative;
+  overflow: hidden;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.4;
+}
+.card-title {
+  font-size: 0.6rem;
+  letter-spacing: 3px;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Boutons */
+button {
+  width: 100%;
+  padding: 0.7rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.7rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 0.5rem;
+}
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.3; cursor: not-allowed; }
+button.btn-accent { border-color: var(--accent); color: var(--accent); }
+button.btn-success { border-color: var(--success); color: var(--success); }
+button.btn-danger { border-color: var(--danger); color: var(--danger); }
+button.btn-open {
+  font-size: 1rem;
+  padding: 1.1rem;
+  border: 2px solid var(--success);
+  color: var(--success);
+  letter-spacing: 5px;
+  text-shadow: 0 0 10px rgba(0,255,136,0.5);
+  box-shadow: 0 0 20px rgba(0,255,136,0.15);
+  animation: pulseGreen 2s infinite;
+}
+@keyframes pulseGreen {
+  0%,100% { box-shadow: 0 0 10px rgba(0,255,136,0.15); }
+  50% { box-shadow: 0 0 25px rgba(0,255,136,0.4); }
+}
+
+/* Canvas / image */
+.cam-box {
+  width: 100%;
+  aspect-ratio: 4/3;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cam-box canvas, .cam-box img, .cam-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cam-placeholder {
+  font-size: 0.65rem;
+  color: var(--muted);
+  letter-spacing: 2px;
+  text-align: center;
+}
+.scan-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: scan 2s linear infinite;
+  display: none;
+}
+@keyframes scan { 0%{top:0%} 100%{top:100%} }
+.cam-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(8,11,18,0.85);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.6rem;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+/* Barre de chargement */
+.progress {
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 0.4rem 0;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.3s;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* Statut BLE */
+.ble-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+.dot.on { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.dot.connecting { background: var(--warning); animation: blink 0.8s infinite; }
+.dot.err { background: var(--danger); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+.ble-text { font-size: 0.7rem; color: var(--muted); }
+
+/* Résultat reconnaissance */
+.result-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  min-height: 90px;
+  font-size: 0.75rem;
+  line-height: 1.7;
+  color: var(--muted);
+  background: var(--surface2);
+  transition: border-color 0.3s, color 0.3s;
+}
+.result-box.ok { border-color: var(--success); color: var(--success); }
+.result-box.ko { border-color: var(--danger); color: var(--danger); }
+
+/* Liste visages enregistrés */
+.face-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.face-chip {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.65rem;
+  color: var(--accent);
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.face-chip span {
+  cursor: pointer;
+  color: var(--danger);
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+/* Solénoïde */
+.sol-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.8rem 0;
+}
+.sol-outer {
+  width: 50px; height: 70px;
+  border: 2px solid var(--border);
+  border-radius: 8px 8px 3px 3px;
+  background: var(--surface2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.4s, box-shadow 0.4s;
+  position: relative;
+}
+.sol-outer.open {
+  border-color: var(--success);
+  box-shadow: 0 0 20px rgba(0,255,136,0.3);
+}
+.sol-pin {
+  width: 12px; height: 42px;
+  background: var(--border);
+  border-radius: 3px;
+  transition: transform 0.5s cubic-bezier(.34,1.56,.64,1), background 0.3s;
+}
+.sol-pin.open { transform: translateY(16px); background: var(--success); }
+.sol-status {
+  font-size: 0.6rem;
+  letter-spacing: 3px;
+  color: var(--muted);
+}
+.sol-status.open { color: var(--success); }
+
+/* Console */
+.console {
+  background: #040608;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.8rem;
+  height: 150px;
+  overflow-y: auto;
+  font-size: 0.65rem;
+  line-height: 1.8;
+}
+.log-ok { color: var(--success); }
+.log-err { color: var(--danger); }
+.log-info { color: var(--accent); }
+.log-warn { color: var(--warning); }
+
+/* Input nom */
+input[type=text] {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  outline: none;
+  margin-bottom: 0.5rem;
+  letter-spacing: 1px;
+}
+input:focus { border-color: var(--accent); }
+label {
+  font-size: 0.6rem;
+  color: var(--muted);
+  letter-spacing: 2px;
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+/* Seuil */
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.5rem;
+}
+input[type=range] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.threshold-val {
+  font-size: 0.7rem;
+  color: var(--accent);
+  min-width: 36px;
+  text-align: right;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⬡ Smart Lock</h1>
+  <p>Local Face Recognition · BLE · No API Key</p>
+</div>
+
+<div class="grid">
+
+  <!-- BLE -->
+  <div class="card">
+    <div class="card-title">Bluetooth · ESP32-CAM</div>
+    <div class="ble-row">
+      <div class="dot" id="bleDot"></div>
+      <span class="ble-text" id="bleText">Not connected</span>
+    </div>
+    <button class="btn-accent" id="btnConnect" onclick="connectBLE()">Connect ESP32-CAM</button>
+    <button id="btnDisc" onclick="disconnectBLE()" disabled>Disconnect</button>
+
+    <!-- Solénoïde -->
+    <div class="sol-wrap">
+      <div class="sol-outer" id="solOuter">
+        <div class="sol-pin" id="solPin"></div>
+      </div>
+      <span class="sol-status" id="solStatus">LOCKED</span>
+    </div>
+
+    <button class="btn-open" id="btnOpen" onclick="openSolenoid()" disabled>⚡ OPEN</button>
+  </div>
+
+  <!-- Caméra ESP32 -->
+  <div class="card">
+    <div class="card-title">ESP32-CAM · Capture</div>
+    <div class="cam-box" id="camBox">
+      <div class="cam-placeholder" id="camPlaceholder">[ WAITING ]<br><br>Connect BLE first</div>
+      <canvas id="captureCanvas" style="display:none"></canvas>
+      <div class="scan-line" id="scanLine"></div>
+      <div class="cam-label" id="camLabel" style="display:none"></div>
+    </div>
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+    <button class="btn-accent" id="btnCapture" onclick="requestCapture()" disabled style="margin-top:0.3rem">
+      Capture Image
+    </button>
+    <button class="btn-accent" id="btnAutoLoop" onclick="toggleAutoLoop()" disabled>
+      Auto Mode: OFF
+    </button>
+  </div>
+
+  <!-- Enregistrement visages -->
+  <div class="card">
+    <div class="card-title">Face Registration</div>
+
+    <div style="margin-bottom:0.8rem; font-size:0.65rem; color:var(--muted); letter-spacing:1px; line-height:1.8;">
+      Upload a photo from your phone or PC<br>
+      → face is extracted automatically
+    </div>
+
+    <!-- Prévisualisation photo uploadée -->
+    <div class="cam-box" id="uploadPreviewBox" style="margin-bottom:0.6rem; aspect-ratio:4/3; cursor:pointer;" onclick="document.getElementById('photoInput').click()">
+      <div class="cam-placeholder" id="uploadPlaceholder">
+        [ UPLOAD PHOTO ]<br><br>
+        📁 Click here to choose<br>
+        <span style="font-size:0.6rem; color:var(--muted);">JPG · PNG · WEBP</span>
+      </div>
+      <img id="uploadPreviewImg" style="display:none; width:100%; height:100%; object-fit:cover;" alt="preview">
+      <canvas id="uploadCanvas" style="display:none; position:absolute; inset:0; width:100%; height:100%;"></canvas>
+      <div class="cam-label" id="uploadLabel" style="display:none;"></div>
+    </div>
+
+    <!-- Input file caché -->
+    <input type="file" id="photoInput" accept="image/*" style="display:none" onchange="onPhotoSelected(event)">
+
+    <label>Name for this person</label>
+    <input type="text" id="personName" placeholder="ex: Alice">
+
+    <!-- Boutons -->
+    <button class="btn-accent" onclick="document.getElementById('photoInput').click()">
+      📁 Choose Photo
+    </button>
+    <button id="btnRegister" onclick="registerFaceFromPhoto()" disabled>
+      ✔ Register This Face
+    </button>
+    <button class="btn-accent" id="btnStartWebcam" onclick="startWebcam()" style="margin-top:0.3rem;">
+      📷 Use Webcam Instead
+    </button>
+    <button id="btnRegisterWebcam" onclick="registerFace()" disabled style="display:none;">
+      ✔ Register from Webcam
+    </button>
+
+    <!-- Webcam (cachée par défaut) -->
+    <div class="cam-box" id="webcamBox" style="display:none; margin-top:0.6rem; aspect-ratio:4/3;">
+      <video id="webcamVideo" autoplay muted playsinline style="width:100%; height:100%; object-fit:cover;"></video>
+      <canvas id="webcamCanvas" style="display:none; position:absolute; inset:0; width:100%; height:100%;"></canvas>
+    </div>
+
+    <div id="modelStatus" style="font-size:0.6rem; color:var(--warning); letter-spacing:1px; margin-top:0.6rem;">
+      Loading AI models...
+    </div>
+
+    <div class="face-list" id="faceList"></div>
+  </div>
+
+  <!-- Reconnaissance -->
+  <div class="card">
+    <div class="card-title">Face Recognition Result</div>
+
+    <div class="threshold-row">
+      <label style="margin:0; white-space:nowrap;">Confidence threshold</label>
+      <input type="range" min="0.3" max="0.9" step="0.05" value="0.5" id="threshold"
+        oninput="document.getElementById('threshVal').textContent=parseFloat(this.value).toFixed(2)">
+      <span class="threshold-val" id="threshVal">0.50</span>
+    </div>
+
+    <div class="result-box" id="resultBox">
+      Waiting for capture and recognition...
+    </div>
+
+    <br>
+    <button class="btn-accent" id="btnRecognize" onclick="recognizeFace()" disabled>
+      Recognize from Capture
+    </button>
+    <button onclick="fullAuto()" id="btnFullAuto" disabled>
+      Full Auto (Capture → Recognize → Open)
+    </button>
+  </div>
+
+  <!-- Console -->
+  <div class="card full">
+    <div class="card-title">System Console</div>
+    <div class="console" id="console"></div>
+  </div>
+
+</div>
+
+<script>
+// ── UUIDs BLE ─────────────────────────────────────────────────────────────────
+const SVC_UUID    = '12345678-1234-1234-1234-123456789abc';
+const CMD_UUID    = '12345678-1234-1234-1234-123456789abd';
+const IMG_UUID    = '12345678-1234-1234-1234-123456789abe';
+const STAT_UUID   = '12345678-1234-1234-1234-123456789abf';
+
+let bleDevice, bleServer, cmdChar, imgChar, statChar;
+let imgBuffer = [], imgSize = 0, imgReceiving = false;
+let capturedImageData = null;   // ImageData pour face-api
+let capturedImageURL  = null;
+let autoLoop = false;
+let autoTimer = null;
+
+// ── face-api : descripteurs enregistrés ──────────────────────────────────────
+let labeledDescriptors = [];   // Array de LabeledFaceDescriptors
+let faceMatcher = null;
+let modelsLoaded = false;
+
+// ── Logger ────────────────────────────────────────────────────────────────────
+function log(msg, type='info') {
+  const c = document.getElementById('console');
+  const t = new Date().toTimeString().slice(0,8);
+  const d = document.createElement('div');
+  d.className = 'log-' + type;
+  d.textContent = `[${t}] ${msg}`;
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+
+// ── Chargement modèles face-api ───────────────────────────────────────────────
+// Modèles hébergés sur jsDelivr (CDN autorisé)
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model';
+
+async function loadModels() {
+  try {
+    log('Loading face recognition models...', 'info');
+    await Promise.all([
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+    ]);
+    modelsLoaded = true;
+    document.getElementById('modelStatus').textContent = '✓ AI models loaded — ready';
+    document.getElementById('modelStatus').style.color = 'var(--success)';
+    log('face-api models loaded successfully', 'ok');
+  } catch(e) {
+    document.getElementById('modelStatus').textContent = '✗ Model load failed: ' + e.message;
+    document.getElementById('modelStatus').style.color = 'var(--danger)';
+    log('Model load error: ' + e.message, 'err');
+  }
+}
+loadModels();
+
+// ── Upload Photo ──────────────────────────────────────────────────────────────
+let uploadedImageEl = null;   // <img> prêt pour face-api
+
+function onPhotoSelected(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = document.getElementById('uploadPreviewImg');
+    img.src = e.target.result;
+    img.style.display = 'block';
+    document.getElementById('uploadPlaceholder').style.display = 'none';
+    document.getElementById('uploadCanvas').style.display = 'none';
+    document.getElementById('uploadLabel').style.display = 'block';
+    document.getElementById('uploadLabel').textContent = file.name + ' · ' + (file.size / 1024).toFixed(0) + ' KB';
+
+    // Stocker l'élément image pour face-api
+    uploadedImageEl = img;
+    img.onload = () => {
+      document.getElementById('btnRegister').disabled = false;
+      log('Photo loaded: ' + file.name, 'ok');
+    };
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── Enregistrement depuis photo uploadée ──────────────────────────────────────
+async function registerFaceFromPhoto() {
+  if (!modelsLoaded) { log('Models not loaded yet', 'err'); return; }
+  const name = document.getElementById('personName').value.trim();
+  if (!name) { log('Enter a name first', 'err'); return; }
+  if (!uploadedImageEl) { log('No photo uploaded', 'err'); return; }
+
+  log(`Detecting face in uploaded photo for "${name}"...`, 'info');
+
+  const detection = await faceapi
+    .detectSingleFace(uploadedImageEl)
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+
+  if (!detection) {
+    log('No face detected in photo — try a clearer/closer photo', 'warn');
+    document.getElementById('uploadLabel').textContent = '⚠ No face detected — try another photo';
+    document.getElementById('uploadLabel').style.color = 'var(--danger)';
+    return;
+  }
+
+  // Dessiner le rectangle de détection sur le canvas
+  const canvas  = document.getElementById('uploadCanvas');
+  const img     = uploadedImageEl;
+  canvas.width  = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  const scaleX = img.clientWidth  / img.naturalWidth;
+  const scaleY = img.clientHeight / img.naturalHeight;
+  const box    = detection.detection.box;
+  ctx.strokeStyle = '#00ff88';
+  ctx.lineWidth   = Math.max(2, img.naturalWidth * 0.005);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = '#00ff88';
+  ctx.font      = `bold ${Math.max(16, img.naturalWidth * 0.04)}px Courier New`;
+  ctx.fillText(name, box.x, box.y > 20 ? box.y - 6 : box.y + box.height + 20);
+
+  // Ajouter le descripteur
+  const existing = labeledDescriptors.find(l => l.label === name);
+  if (existing) {
+    existing._descriptors.push(detection.descriptor);
+    log(`Added photo sample for "${name}" (${existing._descriptors.length} total)`, 'ok');
+  } else {
+    labeledDescriptors.push(
+      new faceapi.LabeledFaceDescriptors(name, [detection.descriptor])
+    );
+    log(`Face registered from photo: "${name}"`, 'ok');
+  }
+
+  document.getElementById('uploadLabel').textContent = `✓ Face registered: ${name}`;
+  document.getElementById('uploadLabel').style.color = 'var(--success)';
+  rebuildMatcher();
+  renderFaceList();
+}
+
+// ── Webcam ────────────────────────────────────────────────────────────────────
+let webcamStream = null;
+async function startWebcam() {
+  const webcamBox = document.getElementById('webcamBox');
+  webcamBox.style.display = 'block';
+  try {
+    webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const video = document.getElementById('webcamVideo');
+    video.srcObject = webcamStream;
+    document.getElementById('btnRegisterWebcam').style.display = 'block';
+    document.getElementById('btnRegisterWebcam').disabled = false;
+    document.getElementById('btnStartWebcam').textContent = '📷 Webcam ON';
+    log('Webcam started', 'ok');
+  } catch(e) {
+    log('Webcam error: ' + e.message, 'err');
+  }
+}
+
+// ── Enregistrement visage depuis webcam ───────────────────────────────────────
+async function registerFace() {
+  if (!modelsLoaded) { log('Models not loaded yet', 'err'); return; }
+  const name = document.getElementById('personName').value.trim();
+  if (!name) { log('Enter a name first', 'err'); return; }
+
+  const video  = document.getElementById('webcamVideo');
+  const canvas = document.getElementById('webcamCanvas');
+
+  log(`Detecting face for "${name}"...`, 'info');
+  const detection = await faceapi
+    .detectSingleFace(video)
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+
+  if (!detection) {
+    log('No face detected — look at the camera', 'warn');
+    return;
+  }
+
+  // Dessiner la détection sur le canvas
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+  faceapi.draw.drawDetections(canvas, [detection]);
+  faceapi.draw.drawFaceLandmarks(canvas, [detection]);
+
+  // Ajouter ou fusionner avec existant
+  const existing = labeledDescriptors.find(l => l.label === name);
+  if (existing) {
+    existing._descriptors.push(detection.descriptor);
+    log(`Added another sample for "${name}" (${existing._descriptors.length} total)`, 'ok');
+  } else {
+    labeledDescriptors.push(
+      new faceapi.LabeledFaceDescriptors(name, [detection.descriptor])
+    );
+    log(`Face registered: "${name}"`, 'ok');
+  }
+
+  rebuildMatcher();
+  renderFaceList();
+}
+
+function rebuildMatcher() {
+  if (labeledDescriptors.length === 0) { faceMatcher = null; return; }
+  const thresh = parseFloat(document.getElementById('threshold').value);
+  faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, thresh);
+  document.getElementById('btnRecognize').disabled = false;
+  document.getElementById('btnFullAuto').disabled = false;
+}
+
+function renderFaceList() {
+  const list = document.getElementById('faceList');
+  list.innerHTML = '';
+  labeledDescriptors.forEach((ld, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'face-chip';
+    chip.innerHTML = `${ld.label} (${ld._descriptors.length}) <span onclick="removeFace(${i})">×</span>`;
+    list.appendChild(chip);
+  });
+}
+
+function removeFace(i) {
+  log(`Removed face: ${labeledDescriptors[i].label}`, 'warn');
+  labeledDescriptors.splice(i, 1);
+  rebuildMatcher();
+  renderFaceList();
+}
+
+// ── Reconnaissance ────────────────────────────────────────────────────────────
+async function recognizeFace() {
+  if (!modelsLoaded || !faceMatcher) { log('Register at least one face first', 'err'); return; }
+  if (!capturedImageURL) { log('No captured image from ESP32', 'err'); return; }
+
+  log('Running face recognition...', 'info');
+  const resultBox = document.getElementById('resultBox');
+  resultBox.className = 'result-box';
+  resultBox.textContent = '⏳ Analyzing...';
+
+  const img = await faceapi.fetchImage(capturedImageURL);
+  const detections = await faceapi
+    .detectAllFaces(img)
+    .withFaceLandmarks()
+    .withFaceDescriptors();
+
+  if (detections.length === 0) {
+    resultBox.className = 'result-box ko';
+    resultBox.textContent = '❌ NO FACE DETECTED\n\nNo human face found in the image.';
+    document.getElementById('btnOpen').disabled = true;
+    log('No face detected in capture', 'warn');
+    return;
+  }
+
+  log(`${detections.length} face(s) detected`, 'info');
+
+  const thresh = parseFloat(document.getElementById('threshold').value);
+  faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, thresh);
+
+  const results = detections.map(d => faceMatcher.findBestMatch(d.descriptor));
+
+  // Dessiner résultats sur canvas
+  const canvas = document.getElementById('captureCanvas');
+  const ctx = canvas.getContext('2d');
+  const imgEl = new Image();
+  imgEl.src = capturedImageURL;
+  await new Promise(r => imgEl.onload = r);
+  ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+
+  const displaySize = { width: canvas.width, height: canvas.height };
+  faceapi.matchDimensions(canvas, displaySize);
+  const resized = faceapi.resizeResults(detections, displaySize);
+
+  resized.forEach((det, i) => {
+    const match = results[i];
+    const color = match.label !== 'unknown' ? '#00ff88' : '#ff3860';
+    const box = det.detection.box;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+    ctx.fillStyle = color;
+    ctx.font = 'bold 14px Courier New';
+    ctx.fillText(
+      `${match.label} (${(1 - match.distance).toFixed(2)})`,
+      box.x, box.y > 16 ? box.y - 5 : box.y + box.height + 16
+    );
+  });
+
+  // Vérifier si au moins un visage autorisé
+  const authorized = results.find(r => r.label !== 'unknown');
+  if (authorized) {
+    resultBox.className = 'result-box ok';
+    resultBox.textContent = `✅ ACCESS GRANTED\n\nIdentified: ${authorized.label}\nConfidence: ${((1 - authorized.distance) * 100).toFixed(1)}%`;
+    document.getElementById('btnOpen').disabled = false;
+    log(`Access granted: ${authorized.label}`, 'ok');
+  } else {
+    resultBox.className = 'result-box ko';
+    resultBox.textContent = '❌ ACCESS DENIED\n\nFace not recognized.\nUnknown person.';
+    document.getElementById('btnOpen').disabled = true;
+    log('Access denied: unknown face', 'warn');
+  }
+}
+
+// ── Full Auto ─────────────────────────────────────────────────────────────────
+async function fullAuto() {
+  requestCapture();
+  log('Full auto: waiting for image...', 'info');
+  await waitFor(() => capturedImageURL !== null, 20000);
+  if (!capturedImageURL) { log('Timeout waiting for image', 'err'); return; }
+  await recognizeFace();
+  const rb = document.getElementById('resultBox');
+  if (rb.className.includes('ok')) {
+    await new Promise(r => setTimeout(r, 400));
+    openSolenoid();
+  }
+}
+
+// ── Auto Loop (surveillance continue) ────────────────────────────────────────
+function toggleAutoLoop() {
+  autoLoop = !autoLoop;
+  const btn = document.getElementById('btnAutoLoop');
+  if (autoLoop) {
+    btn.textContent = 'Auto Mode: ON';
+    btn.style.borderColor = 'var(--success)';
+    btn.style.color = 'var(--success)';
+    log('Auto mode started — capturing every 5s', 'ok');
+    runAutoLoop();
+  } else {
+    clearTimeout(autoTimer);
+    btn.textContent = 'Auto Mode: OFF';
+    btn.style.borderColor = '';
+    btn.style.color = '';
+    log('Auto mode stopped', 'warn');
+  }
+}
+
+async function runAutoLoop() {
+  if (!autoLoop) return;
+  capturedImageURL = null;
+  requestCapture();
+  await waitFor(() => capturedImageURL !== null, 15000);
+  if (capturedImageURL && faceMatcher) {
+    await recognizeFace();
+    const rb = document.getElementById('resultBox');
+    if (rb.className.includes('ok')) openSolenoid();
+  }
+  if (autoLoop) autoTimer = setTimeout(runAutoLoop, 5000);
+}
+
+// ── BLE connexion ─────────────────────────────────────────────────────────────
+function setBLE(state, text) {
+  document.getElementById('bleDot').className = 'dot ' + state;
+  document.getElementById('bleText').textContent = text;
+}
+
+async function connectBLE() {
+  if (!navigator.bluetooth) { log('Web Bluetooth not supported — use Chrome/Edge', 'err'); return; }
+  try {
+    setBLE('connecting', 'Scanning...');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ name: 'ESP32-CAM-Lock' }],
+      optionalServices: [SVC_UUID]
+    });
+    bleDevice.addEventListener('gattserverdisconnected', onDisc);
+    setBLE('connecting', 'Connecting GATT...');
+    bleServer = await bleDevice.gatt.connect();
+    const svc = await bleServer.getPrimaryService(SVC_UUID);
+    cmdChar  = await svc.getCharacteristic(CMD_UUID);
+    imgChar  = await svc.getCharacteristic(IMG_UUID);
+    statChar = await svc.getCharacteristic(STAT_UUID);
+    await imgChar.startNotifications();
+    imgChar.addEventListener('characteristicvaluechanged', onImgChunk);
+    await statChar.startNotifications();
+    statChar.addEventListener('characteristicvaluechanged', onStat);
+    setBLE('on', 'Connected · ' + bleDevice.name);
+    log('BLE connected — services ready', 'ok');
+    document.getElementById('btnConnect').disabled = true;
+    document.getElementById('btnDisc').disabled = false;
+    document.getElementById('btnCapture').disabled = false;
+    document.getElementById('btnAutoLoop').disabled = false;
+    document.getElementById('btnFullAuto').disabled = labeledDescriptors.length === 0;
+  } catch(e) {
+    setBLE('err', 'Connection failed');
+    log('BLE error: ' + e.message, 'err');
+  }
+}
+
+function disconnectBLE() {
+  if (bleDevice?.gatt.connected) bleDevice.gatt.disconnect();
+}
+function onDisc() {
+  setBLE('', 'Disconnected');
+  log('ESP32-CAM disconnected', 'warn');
+  document.getElementById('btnConnect').disabled = false;
+  document.getElementById('btnDisc').disabled = true;
+  document.getElementById('btnCapture').disabled = true;
+  document.getElementById('btnOpen').disabled = true;
+  document.getElementById('btnAutoLoop').disabled = true;
+  autoLoop = false;
+}
+
+// ── Réception image ───────────────────────────────────────────────────────────
+function onImgChunk(e) {
+  if (!imgReceiving) return;
+  imgBuffer.push(new Uint8Array(e.target.value.buffer));
+  const received = imgBuffer.reduce((s,c) => s+c.length, 0);
+  const pct = imgSize > 0 ? Math.round(received / imgSize * 100) : 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+}
+
+function onStat(e) {
+  const s = new TextDecoder().decode(e.target.value);
+  log('ESP32 status: ' + s, 'info');
+  if (s.startsWith('IMG_START:')) {
+    imgSize = parseInt(s.split(':')[1]);
+    imgBuffer = [];
+    imgReceiving = true;
+    document.getElementById('scanLine').style.display = 'block';
+    document.getElementById('progressBar').style.width = '0%';
+  } else if (s === 'IMG_END') {
+    imgReceiving = false;
+    document.getElementById('scanLine').style.display = 'none';
+    assembleImage();
+  } else if (s === 'OPENING') {
+    setSolenoid(true);
+  } else if (s === 'CLOSED') {
+    setSolenoid(false);
+  }
+}
+
+function assembleImage() {
+  const total = imgBuffer.reduce((s,c) => s+c.length, 0);
+  const arr = new Uint8Array(total);
+  let off = 0;
+  for (const c of imgBuffer) { arr.set(c, off); off += c.length; }
+  const blob = new Blob([arr], { type: 'image/jpeg' });
+  if (capturedImageURL) URL.revokeObjectURL(capturedImageURL);
+  capturedImageURL = URL.createObjectURL(blob);
+
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.getElementById('captureCanvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.style.display = 'block';
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    document.getElementById('camPlaceholder').style.display = 'none';
+    document.getElementById('camLabel').style.display = 'block';
+    document.getElementById('camLabel').textContent =
+      `${total} bytes · ${new Date().toLocaleTimeString()}`;
+  };
+  img.src = capturedImageURL;
+
+  document.getElementById('progressBar').style.width = '100%';
+  log(`Image received: ${total} bytes`, 'ok');
+}
+
+// ── Commandes BLE ─────────────────────────────────────────────────────────────
+async function sendCmd(cmd) {
+  if (!cmdChar) { log('Not connected', 'err'); return; }
+  await cmdChar.writeValue(new TextEncoder().encode(cmd));
+  log('Command sent: ' + cmd, 'info');
+}
+
+function requestCapture() {
+  capturedImageURL = null;
+  document.getElementById('btnOpen').disabled = true;
+  sendCmd('CAPTURE');
+}
+
+async function openSolenoid() {
+  await sendCmd('OPEN');
+}
+
+// ── Solénoïde visuel ──────────────────────────────────────────────────────────
+function setSolenoid(open) {
+  document.getElementById('solOuter').className = 'sol-outer' + (open ? ' open' : '');
+  document.getElementById('solPin').className   = 'sol-pin'   + (open ? ' open' : '');
+  document.getElementById('solStatus').className= 'sol-status' + (open ? ' open' : '');
+  document.getElementById('solStatus').textContent = open ? 'UNLOCKED' : 'LOCKED';
+  if (open) log('Solenoid OPEN', 'ok');
+  else log('Solenoid LOCKED', 'info');
+}
+
+// ── Utilitaire ────────────────────────────────────────────────────────────────
+function waitFor(fn, timeout) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    const t = setInterval(() => {
+      if (fn() || Date.now()-start > timeout) { clearInterval(t); resolve(); }
+    }, 300);
+  });
+}
+
+log('System ready — load models and register faces', 'ok');
+</script>
+</body>
+</html>
